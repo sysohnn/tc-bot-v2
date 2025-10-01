@@ -6,7 +6,7 @@ import pandas as pd
 import requests
 
 # ✅ OpenRouter API KEY (보안 주의!)
-API_KEY = "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"
+API_KEY = "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"
 
 st.set_page_config(page_title="TC-Bot v3", layout="wide")
 st.title("🧪 TC-Bot v3: 테스트케이스 자동 생성기")
@@ -129,3 +129,4 @@ if st.session_state.parsed_df is not None:
         st.download_button("⬇️ 엑셀 다운로드",
                            data=tmp.read(),
                            file_name="테스트케이스.xlsx")
+
