@@ -41,6 +41,8 @@ code_tab , tc_tab, log_tab = st.tabs(
 # ✅ LLM 호출 중 경고 표시 (탭 차단하지 않음)
 if st.session_state["is_loading"]:
     st.warning("⚠️ 현재 LLM 호출 중입니다. 탭 이동은 가능하지만 다른 요청은 완료 후 시도해 주세요.")
+else:
+    st.empty()
 
 # ────────────────────────────────────────────────
 # 🔧 유틸 함수: 에러 로그 전처리
@@ -202,7 +204,7 @@ with tc_tab:
                                key="tc_file")
     summary_type = st.selectbox("📌 요약 유형", ["기능 명세서", "요구사항 정의서"],
                                 key="summary_type")
-    if st.button("🚀 명세서 생성하기") and tc_file:
+    if st.button("🚀 명세서 생성하기", disabled=st.session_state["is_loading"]) and tc_file:
         st.session_state["is_loading"] = True
         try:
             if tc_file.name.endswith("csv"):
@@ -275,17 +277,19 @@ with log_tab:
     Lang=0412
     """
 
-    st.download_button("⬇️ 샘플 에러 로그 다운로드",
-                       sample_log,
-                       file_name="sample_error_log.log")
-
+    st.download_button(
+    "⬇️ 샘플 에러 로그 다운로드",
+    data=sample_log,
+    file_name="sample_error_log.log",
+    disabled=st.session_state["is_loading"]
+)
 
     log_file = st.file_uploader("📂 에러 로그 파일 업로드 (.log, .txt)",
                                 type=["log", "txt"],
                                 key="log_file")
     if not API_KEY:
         st.warning("🔐 OpenRouter API Key가 설정되지 않았습니다.")
-    if st.button("🚀 시나리오 생성하기") and log_file:
+    if st.button("🚀 시나리오 생성하기", disabled=st.session_state["is_loading"]) and log_file:
         st.session_state["is_loading"] = True
         with st.spinner("LLM을 호출 중입니다..."):
             raw_log = log_file.read().decode("utf-8", errors="ignore")
@@ -346,5 +350,6 @@ with log_tab:
         st.download_button("⬇️ 시나리오 텍스트 다운로드",
                            data=st.session_state.scenario_result,
                            file_name="재현_시나리오.txt")
+
 
 
