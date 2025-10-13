@@ -355,8 +355,3 @@ with log_tab:
         st.download_button("⬇️ 시나리오 텍스트 다운로드",
                            data=st.session_state.scenario_result,
                            file_name="재현_시나리오.txt")
-
-
-
-
-
