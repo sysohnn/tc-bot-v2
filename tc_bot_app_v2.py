@@ -7,10 +7,13 @@ import requests
 import re
 
 # ✅ OpenRouter API Key (보안을 위해 secrets.toml 또는 환경변수 사용 권장)
-API_KEY = st.secrets.get("OPENROUTER_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+API_KEY = st.secrets.get("OPENROUTER_API_KEY") or os.environ.get(
+    "OPENROUTER_API_KEY")
 
 if not API_KEY:
-    st.warning("⚠️ OpenRouter API Key가 설정되지 않았습니다. .streamlit/secrets.toml에 OPENROUTER_API_KEY 항목을 추가하세요.")
+    st.warning(
+        "⚠️ OpenRouter API Key가 설정되지 않았습니다. .streamlit/secrets.toml에 OPENROUTER_API_KEY 항목을 추가하세요."
+    )
 
 st.set_page_config(page_title="🧠 TC-Bot: QA 자동화 도우미", layout="wide")
 st.title("🤖 TC-Bot: AI 기반 QA 자동화 도우미")
@@ -94,6 +97,25 @@ def preprocess_log_text(text: str,
 # ────────────────────────────────────────────────
 with log_tab:
     st.subheader("🐞 에러 로그 기반 재현 시나리오 생성기")
+
+    # ✅ 샘플 에러 로그 다운로드 버튼 추가
+    sample_log = """[InstallShield Silent]
+    Version=v7.00
+    File=Log File
+    [ResponseResult]
+    ResultCode=0
+    [Application]
+    Name=Realtek Audio Driver
+    Version=4.92
+    Company=Realtek Semiconductor Corp.
+    Lang=0412
+    """
+
+    st.download_button("⬇️ 샘플 에러 로그 다운로드",
+                       sample_log,
+                       file_name="sample_error_log.log")
+
+
     log_file = st.file_uploader("📂 에러 로그 파일 업로드 (.log, .txt)",
                                 type=["log", "txt"],
                                 key="log_file")
@@ -311,5 +333,3 @@ with code_tab:
             st.download_button("⬇️ 엑셀 다운로드",
                                data=tmp.read(),
                                file_name="테스트케이스.xlsx")
-
-
