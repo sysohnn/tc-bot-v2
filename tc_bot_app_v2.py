@@ -230,7 +230,7 @@ with tc_tab:
 - 기대 효과
 
 테스트케이스 목록:
-{df.to_markdown(index=False)}
+{df.to_csv(index=False)}
 """
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -350,6 +350,7 @@ with log_tab:
         st.download_button("⬇️ 시나리오 텍스트 다운로드",
                            data=st.session_state.scenario_result,
                            file_name="재현_시나리오.txt")
+
 
 
 
