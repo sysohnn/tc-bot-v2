@@ -34,15 +34,13 @@ with st.sidebar:
     qa_role = st.selectbox("👤 QA 역할", ["기능 QA", "보안 QA", "성능 QA"])
     st.session_state["qa_role"] = qa_role
 
-# 탭 접근 제어: LLM 작업 중이면 탭 이동 금지
-if st.session_state["is_loading"]:
-    st.warning("⚠️ 현재 LLM 호출 중입니다. 작업이 완료된 후 다른 탭을 이용해 주세요.")
-    st.stop()
-
 # ✅ 탭 구성
 log_tab, tc_tab, code_tab = st.tabs(
     ["🧪 소스코드 → 테스트케이스 자동 생성","📑 테스트케이스 → 명세서 요약","🐞 에러 로그 → 재현 시나리오" ])
 
+# ✅ LLM 호출 중 경고 표시 (탭 차단하지 않음)
+if st.session_state["is_loading"]:
+    st.warning("⚠️ 현재 LLM 호출 중입니다. 탭 이동은 가능하지만 다른 요청은 완료 후 시도해 주세요.")
 
 # ────────────────────────────────────────────────
 # 🔧 유틸 함수: 에러 로그 전처리
@@ -348,3 +346,4 @@ with log_tab:
         st.download_button("⬇️ 시나리오 텍스트 다운로드",
                            data=st.session_state.scenario_result,
                            file_name="재현_시나리오.txt")
+
