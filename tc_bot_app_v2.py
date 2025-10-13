@@ -7,7 +7,7 @@ import requests
 import re
 
 # ✅ OpenRouter API Key (보안을 위해 secrets.toml 또는 환경변수 사용 권장)
-API_KEY = os.environ.get("OPENROUTER_API_KEY")
+API_KEY = st.secrets.get("OPENROUTER_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
 
 if not API_KEY:
     st.warning("⚠️ OpenRouter API Key가 설정되지 않았습니다. .streamlit/secrets.toml에 OPENROUTER_API_KEY 항목을 추가하세요.")
@@ -311,4 +311,5 @@ with code_tab:
             st.download_button("⬇️ 엑셀 다운로드",
                                data=tmp.read(),
                                file_name="테스트케이스.xlsx")
+
 
