@@ -35,7 +35,7 @@ with st.sidebar:
     st.session_state["qa_role"] = qa_role
 
 # ✅ 탭 구성
-log_tab, tc_tab, code_tab = st.tabs(
+code_tab , tc_tab, log_tab = st.tabs(
     ["🧪 소스코드 → 테스트케이스 자동 생성","📑 테스트케이스 → 명세서 요약","🐞 에러 로그 → 재현 시나리오" ])
 
 # ✅ LLM 호출 중 경고 표시 (탭 차단하지 않음)
@@ -346,4 +346,5 @@ with log_tab:
         st.download_button("⬇️ 시나리오 텍스트 다운로드",
                            data=st.session_state.scenario_result,
                            file_name="재현_시나리오.txt")
+
 
