@@ -18,6 +18,15 @@ if not API_KEY:
 st.set_page_config(page_title="🧠 TC-Bot: QA 자동화 도우미", layout="wide")
 st.title("🤖 TC-Bot: AI 기반 QA 자동화 도우미")
 
+# ✅ 세션 초기화 (탭 선언보다 먼저 수행해야 함)
+for key in ["scenario_result", "spec_result", "llm_result", "parsed_df", "last_uploaded_file", "last_model", "last_role", "is_loading"]:
+    if key not in st.session_state:
+        st.session_state[key] = None
+
+if st.session_state["is_loading"] is None:
+    st.session_state["is_loading"] = False
+
+
 # ✅ 사이드바 설정
 with st.sidebar:
     st.header("⚙️ 설정")
@@ -25,17 +34,15 @@ with st.sidebar:
     qa_role = st.selectbox("👤 QA 역할", ["기능 QA", "보안 QA", "성능 QA"])
     st.session_state["qa_role"] = qa_role
 
+# 탭 접근 제어: LLM 작업 중이면 탭 이동 금지
+if st.session_state["is_loading"]:
+    st.warning("⚠️ 현재 LLM 호출 중입니다. 작업이 완료된 후 다른 탭을 이용해 주세요.")
+    st.stop()
+
 # ✅ 탭 구성
 log_tab, tc_tab, code_tab = st.tabs(
-    ["🐞 에러 로그 → 재현 시나리오", "📑 테스트케이스 → 명세서 요약", "🧪 소스코드 → 테스트케이스 자동 생성"])
+    ["🧪 소스코드 → 테스트케이스 자동 생성","📑 테스트케이스 → 명세서 요약","🐞 에러 로그 → 재현 시나리오" ])
 
-# ✅ 세션 초기화
-for key in [
-        "scenario_result", "spec_result", "llm_result", "parsed_df",
-        "last_uploaded_file", "last_model", "last_role"
-]:
-    if key not in st.session_state:
-        st.session_state[key] = None
 
 # ────────────────────────────────────────────────
 # 🔧 유틸 함수: 에러 로그 전처리
@@ -91,158 +98,8 @@ def preprocess_log_text(text: str,
     }
     return trimmed, stats
 
-
 # ────────────────────────────────────────────────
-# 🐞 TAB 1: 에러 로그 → 재현 시나리오 생성기
-# ────────────────────────────────────────────────
-with log_tab:
-    st.subheader("🐞 에러 로그 기반 재현 시나리오 생성기")
-
-    # ✅ 샘플 에러 로그 다운로드 버튼 추가
-    sample_log = """[InstallShield Silent]
-    Version=v7.00
-    File=Log File
-    [ResponseResult]
-    ResultCode=0
-    [Application]
-    Name=Realtek Audio Driver
-    Version=4.92
-    Company=Realtek Semiconductor Corp.
-    Lang=0412
-    """
-
-    st.download_button("⬇️ 샘플 에러 로그 다운로드",
-                       sample_log,
-                       file_name="sample_error_log.log")
-
-
-    log_file = st.file_uploader("📂 에러 로그 파일 업로드 (.log, .txt)",
-                                type=["log", "txt"],
-                                key="log_file")
-    if not API_KEY:
-        st.warning("🔐 OpenRouter API Key가 설정되지 않았습니다.")
-    if st.button("🚀 시나리오 생성하기") and log_file:
-        with st.spinner("LLM을 호출 중입니다..."):
-            raw_log = log_file.read().decode("utf-8", errors="ignore")
-            qa_role = st.session_state.get("qa_role", "기능 QA")
-            chosen_model = model
-            budget = safe_char_budget(chosen_model, token_margin=1024)
-            focused_log, stats = preprocess_log_text(
-                raw_log,
-                context_lines=5,
-                keep_last_lines_if_empty=2000,
-                char_budget=budget)
-            st.info(
-                f"전처리 결과: 문자 {stats['kept_chars']:,}/{stats['char_budget']:,} 사용 (전체 라인 {stats['total_lines']:,})."
-            )
-            prompt = f"""너는 시니어 QA 엔지니어이며, 현재 '{qa_role}' 역할을 맡고 있다.
-아래 요약·발췌한 로그를 분석하여 해당 오류를 재현할 수 있는 테스트 시나리오를 작성하라.
-
-시나리오 형식:
-1. 시나리오 제목:
-2. 전제 조건:
-3. 테스트 입력값:
-4. 재현 절차:
-5. 기대 결과:
-
-전처리된 에러 로그:
-{focused_log}
-"""
-            try:
-                response = requests.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {API_KEY}"},
-                    json={
-                        "model": chosen_model,
-                        "messages": [{
-                            "role": "user",
-                            "content": prompt
-                        }],
-                        "temperature": 0.2
-                    },
-                    timeout=120,
-                )
-                if response.status_code == 200:
-                    content = response.json(
-                    )["choices"][0]["message"]["content"]
-                    st.session_state.scenario_result = content
-                else:
-                    st.error("❌ LLM 호출 실패")
-                    st.caption("서버 응답:")
-                    st.text(response.text)
-            except requests.exceptions.RequestException as e:
-                st.error("❌ 네트워크 오류 발생")
-                st.exception(e)
-    if st.session_state.scenario_result:
-        st.success("✅ 재현 시나리오 생성 완료!")
-        st.markdown("## 📋 자동 생성된 테스트 시나리오")
-        st.markdown(st.session_state.scenario_result)
-        st.download_button("⬇️ 시나리오 텍스트 다운로드",
-                           data=st.session_state.scenario_result,
-                           file_name="재현_시나리오.txt")
-
-# ────────────────────────────────────────────────
-# 📑 TAB 2: 테스트케이스 → 명세서 요약
-# ────────────────────────────────────────────────
-with tc_tab:
-    st.subheader("📑 테스트케이스 기반 기능/요구사항 명세서 추출기")
-    tc_file = st.file_uploader("📂 테스트케이스 파일 업로드 (.xlsx, .csv)",
-                               type=["xlsx", "csv"],
-                               key="tc_file")
-    summary_type = st.selectbox("📌 요약 유형", ["기능 명세서", "요구사항 정의서"],
-                                key="summary_type")
-    if st.button("🚀 명세서 생성하기") and tc_file:
-        try:
-            if tc_file.name.endswith("csv"):
-                df = pd.read_csv(tc_file)
-            else:
-                df = pd.read_excel(tc_file)
-        except Exception as e:
-            st.error(f"❌ 파일 읽기 실패: {e}")
-            st.stop()
-        required_cols = ["TC ID", "기능 설명", "입력값", "예상 결과"]
-        if not all(col in df.columns for col in required_cols):
-            st.warning("⚠️ 다음 컬럼이 필요합니다: TC ID, 기능 설명, 입력값, 예상 결과")
-            st.stop()
-        prompt = f"""
-너는 테스트케이스를 분석하여 그 기반이 되는 {summary_type}를 작성하는 QA 전문가이다.
-다음 테스트케이스들을 분석하여 기능명 또는 요구사항 제목과 함께, 설명과 목적을 자연어로 요약하라.
-
-형식:
-- 기능명 또는 요구사항 제목
-- 설명
-- 기대 효과
-
-테스트케이스 목록:
-{df.to_markdown(index=False)}
-"""
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {API_KEY}"},
-            json={
-                "model": model,
-                "messages": [{
-                    "role": "user",
-                    "content": prompt
-                }]
-            })
-        if response.status_code == 200:
-            result = response.json()["choices"][0]["message"]["content"]
-            st.session_state.spec_result = result
-        else:
-            st.error("❌ LLM 호출 실패")
-            st.text(response.text)
-
-    if st.session_state.spec_result:
-        st.success("✅ 명세서 생성 완료!")
-        st.markdown("## 📋 자동 생성된 명세서")
-        st.markdown(st.session_state.spec_result)
-        st.download_button("⬇️ 명세서 텍스트 다운로드",
-                           data=st.session_state.spec_result,
-                           file_name="기능_요구사항_명세서.txt")
-
-# ────────────────────────────────────────────────
-# 🧪 TAB 3: 소스코드 → 테스트케이스 자동 생성기
+# 🧪 TAB 1: 소스코드 → 테스트케이스 자동 생성기
 # ────────────────────────────────────────────────
 with code_tab:
     st.subheader("🧪 소스코드 기반 테스트케이스 자동 생성기")
@@ -259,6 +116,7 @@ with code_tab:
     qa_role = st.session_state.get("qa_role", "기능 QA")
 
     if uploaded_file and need_llm_call(uploaded_file, model, qa_role):
+        st.session_state["is_loading"] = True
         with st.spinner("🔍 LLM 호출 중입니다. 잠시만 기다려 주세요..."):
             with tempfile.TemporaryDirectory() as tmpdir:
                 zip_path = os.path.join(tmpdir, uploaded_file.name)
@@ -319,6 +177,7 @@ with code_tab:
             st.session_state.last_uploaded_file = uploaded_file.name
             st.session_state.last_model = model
             st.session_state.last_role = qa_role
+        st.session_state["is_loading"] = False
 
     if st.session_state.llm_result:
         st.success("✅ 테스트케이스 생성 완료!")
@@ -333,3 +192,159 @@ with code_tab:
             st.download_button("⬇️ 엑셀 다운로드",
                                data=tmp.read(),
                                file_name="테스트케이스.xlsx")
+
+
+# ────────────────────────────────────────────────
+# 📑 TAB 2: 테스트케이스 → 명세서 요약
+# ────────────────────────────────────────────────
+with tc_tab:
+    st.subheader("📑 테스트케이스 기반 기능/요구사항 명세서 추출기")
+    tc_file = st.file_uploader("📂 테스트케이스 파일 업로드 (.xlsx, .csv)",
+                               type=["xlsx", "csv"],
+                               key="tc_file")
+    summary_type = st.selectbox("📌 요약 유형", ["기능 명세서", "요구사항 정의서"],
+                                key="summary_type")
+    if st.button("🚀 명세서 생성하기") and tc_file:
+        st.session_state["is_loading"] = True
+        try:
+            if tc_file.name.endswith("csv"):
+                df = pd.read_csv(tc_file)
+            else:
+                df = pd.read_excel(tc_file)
+        except Exception as e:
+            st.session_state["is_loading"] = False
+            st.error(f"❌ 파일 읽기 실패: {e}")
+            st.stop()
+        required_cols = ["TC ID", "기능 설명", "입력값", "예상 결과"]
+        if not all(col in df.columns for col in required_cols):
+            st.session_state["is_loading"] = False
+            st.warning("⚠️ 다음 컬럼이 필요합니다: TC ID, 기능 설명, 입력값, 예상 결과")
+            st.stop()
+        prompt = f"""
+너는 테스트케이스를 분석하여 그 기반이 되는 {summary_type}를 작성하는 QA 전문가이다.
+다음 테스트케이스들을 분석하여 기능명 또는 요구사항 제목과 함께, 설명과 목적을 자연어로 요약하라.
+
+형식:
+- 기능명 또는 요구사항 제목
+- 설명
+- 기대 효과
+
+테스트케이스 목록:
+{df.to_markdown(index=False)}
+"""
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {API_KEY}"},
+            json={
+                "model": model,
+                "messages": [{
+                    "role": "user",
+                    "content": prompt
+                }]
+            })
+        if response.status_code == 200:
+            result = response.json()["choices"][0]["message"]["content"]
+            st.session_state.spec_result = result
+        else:
+            st.error("❌ LLM 호출 실패")
+            st.text(response.text)
+        st.session_state["is_loading"] = False
+
+    if st.session_state.spec_result:
+        st.success("✅ 명세서 생성 완료!")
+        st.markdown("## 📋 자동 생성된 명세서")
+        st.markdown(st.session_state.spec_result)
+        st.download_button("⬇️ 명세서 텍스트 다운로드",
+                           data=st.session_state.spec_result,
+                           file_name="기능_요구사항_명세서.txt")
+
+# ────────────────────────────────────────────────
+# 🐞 TAB 3: 에러 로그 → 재현 시나리오 생성기
+# ────────────────────────────────────────────────
+with log_tab:
+    st.subheader("🐞 에러 로그 기반 재현 시나리오 생성기")
+
+    # ✅ 샘플 에러 로그 다운로드 버튼 추가
+    sample_log = """[InstallShield Silent]
+    Version=v7.00
+    File=Log File
+    [ResponseResult]
+    ResultCode=0
+    [Application]
+    Name=Realtek Audio Driver
+    Version=4.92
+    Company=Realtek Semiconductor Corp.
+    Lang=0412
+    """
+
+    st.download_button("⬇️ 샘플 에러 로그 다운로드",
+                       sample_log,
+                       file_name="sample_error_log.log")
+
+
+    log_file = st.file_uploader("📂 에러 로그 파일 업로드 (.log, .txt)",
+                                type=["log", "txt"],
+                                key="log_file")
+    if not API_KEY:
+        st.warning("🔐 OpenRouter API Key가 설정되지 않았습니다.")
+    if st.button("🚀 시나리오 생성하기") and log_file:
+        st.session_state["is_loading"] = True
+        with st.spinner("LLM을 호출 중입니다..."):
+            raw_log = log_file.read().decode("utf-8", errors="ignore")
+            qa_role = st.session_state.get("qa_role", "기능 QA")
+            chosen_model = model
+            budget = safe_char_budget(chosen_model, token_margin=1024)
+            focused_log, stats = preprocess_log_text(
+                raw_log,
+                context_lines=5,
+                keep_last_lines_if_empty=2000,
+                char_budget=budget)
+            st.info(
+                f"전처리 결과: 문자 {stats['kept_chars']:,}/{stats['char_budget']:,} 사용 (전체 라인 {stats['total_lines']:,})."
+            )
+            prompt = f"""너는 시니어 QA 엔지니어이며, 현재 '{qa_role}' 역할을 맡고 있다.
+아래 요약·발췌한 로그를 분석하여 해당 오류를 재현할 수 있는 테스트 시나리오를 작성하라.
+
+시나리오 형식:
+1. 시나리오 제목:
+2. 전제 조건:
+3. 테스트 입력값:
+4. 재현 절차:
+5. 기대 결과:
+
+전처리된 에러 로그:
+{focused_log}
+"""
+            try:
+                response = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {API_KEY}"},
+                    json={
+                        "model": chosen_model,
+                        "messages": [{
+                            "role": "user",
+                            "content": prompt
+                        }],
+                        "temperature": 0.2
+                    },
+                    timeout=120,
+                )
+                if response.status_code == 200:
+                    content = response.json(
+                    )["choices"][0]["message"]["content"]
+                    st.session_state.scenario_result = content
+                else:
+                    st.error("❌ LLM 호출 실패")
+                    st.caption("서버 응답:")
+                    st.text(response.text)
+            except requests.exceptions.RequestException as e:
+                st.error("❌ 네트워크 오류 발생")
+                st.exception(e)
+        st.session_state["is_loading"] = False
+    if st.session_state.scenario_result:
+        st.success("✅ 재현 시나리오 생성 완료!")
+        st.markdown("## 📋 자동 생성된 테스트 시나리오")
+        st.markdown(st.session_state.scenario_result)
+        st.download_button("⬇️ 시나리오 텍스트 다운로드",
+                           data=st.session_state.scenario_result,
+                           file_name="재현_시나리오.txt")
