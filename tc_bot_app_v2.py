@@ -204,23 +204,27 @@ with tc_tab:
                                key="tc_file")
     summary_type = st.selectbox("📌 요약 유형", ["기능 명세서", "요구사항 정의서"],
                                 key="summary_type")
+
     if st.button("🚀 명세서 생성하기", disabled=st.session_state["is_loading"]) and tc_file:
         st.session_state["is_loading"] = True
-        try:
-            if tc_file.name.endswith("csv"):
-                df = pd.read_csv(tc_file)
-            else:
-                df = pd.read_excel(tc_file)
-        except Exception as e:
-            st.session_state["is_loading"] = False
-            st.error(f"❌ 파일 읽기 실패: {e}")
-            st.stop()
-        required_cols = ["TC ID", "기능 설명", "입력값", "예상 결과"]
-        if not all(col in df.columns for col in required_cols):
-            st.session_state["is_loading"] = False
-            st.warning("⚠️ 다음 컬럼이 필요합니다: TC ID, 기능 설명, 입력값, 예상 결과")
-            st.stop()
-        prompt = f"""
+        with st.spinner("🔍 LLM 호출 중입니다. 잠시만 기다려 주세요..."):
+            try:
+                if tc_file.name.endswith("csv"):
+                    df = pd.read_csv(tc_file)
+                else:
+                    df = pd.read_excel(tc_file)
+            except Exception as e:
+                st.session_state["is_loading"] = False
+                st.error(f"❌ 파일 읽기 실패: {e}")
+                st.stop()
+
+            required_cols = ["TC ID", "기능 설명", "입력값", "예상 결과"]
+            if not all(col in df.columns for col in required_cols):
+                st.session_state["is_loading"] = False
+                st.warning("⚠️ 다음 컬럼이 필요합니다: TC ID, 기능 설명, 입력값, 예상 결과")
+                st.stop()
+
+            prompt = f"""
 너는 테스트케이스를 분석하여 그 기반이 되는 {summary_type}를 작성하는 QA 전문가이다.
 다음 테스트케이스들을 분석하여 기능명 또는 요구사항 제목과 함께, 설명과 목적을 자연어로 요약하라.
 
@@ -232,22 +236,22 @@ with tc_tab:
 테스트케이스 목록:
 {df.to_csv(index=False)}
 """
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {API_KEY}"},
-            json={
-                "model": model,
-                "messages": [{
-                    "role": "user",
-                    "content": prompt
-                }]
-            })
-        if response.status_code == 200:
-            result = response.json()["choices"][0]["message"]["content"]
-            st.session_state.spec_result = result
-        else:
-            st.error("❌ LLM 호출 실패")
-            st.text(response.text)
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {API_KEY}"},
+                json={
+                    "model": model,
+                    "messages": [{
+                        "role": "user",
+                        "content": prompt
+                    }]
+                })
+            if response.status_code == 200:
+                result = response.json()["choices"][0]["message"]["content"]
+                st.session_state.spec_result = result
+            else:
+                st.error("❌ LLM 호출 실패")
+                st.text(response.text)
         st.session_state["is_loading"] = False
 
     if st.session_state.spec_result:
@@ -257,6 +261,7 @@ with tc_tab:
         st.download_button("⬇️ 명세서 텍스트 다운로드",
                            data=st.session_state.spec_result,
                            file_name="기능_요구사항_명세서.txt")
+
 
 # ────────────────────────────────────────────────
 # 🐞 TAB 3: 에러 로그 → 재현 시나리오 생성기
@@ -350,6 +355,7 @@ with log_tab:
         st.download_button("⬇️ 시나리오 텍스트 다운로드",
                            data=st.session_state.scenario_result,
                            file_name="재현_시나리오.txt")
+
 
 
 
