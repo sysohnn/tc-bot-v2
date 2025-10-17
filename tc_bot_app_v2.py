@@ -140,7 +140,7 @@ def build_sample_tc_excel() -> bytes:
         df.to_excel(writer, index=False, sheet_name="테스트케이스")
     return bio.getvalue()
 
-# [ADD] 결과 미리보기(휴리스틱) - Tab1: 코드 ZIP → 통계 + TC 프리뷰 3건
+# [FIX] 결과 미리보기(휴리스틱) - Tab1: 코드 ZIP 분석 확장 (모듈/디렉터리 집계 포함)
 def analyze_code_zip(zip_bytes: bytes) -> dict:
     lang_map = {
         ".py": "Python", ".java": "Java", ".js": "JS", ".ts": "TS",
@@ -149,12 +149,22 @@ def analyze_code_zip(zip_bytes: bytes) -> dict:
     lang_counts = Counter()
     top_functions = []
     total_files = 0
+    # [ADD] 모듈(상위 디렉터리) 집계
+    module_counts = Counter()
+    sample_paths = []
 
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
             names = zf.namelist()
             total_files = len(names)
+            sample_paths = names[:10]
             for n in names:
+                # 모듈명 = 최상위 디렉터리, 없으면 '(root)'
+                parts = n.split("/")
+                module = parts[0] if len(parts) > 1 else "(root)"
+                if not n.endswith("/"):  # 디렉터리 엔트리 제외
+                    module_counts[module] += 1
+
                 ext = os.path.splitext(n)[1].lower()
                 if ext in lang_map:
                     lang_counts[lang_map[ext]] += 1
@@ -176,53 +186,227 @@ def analyze_code_zip(zip_bytes: bytes) -> dict:
     return {
         "total_files": total_files,
         "lang_counts": lang_counts,
-        "top_functions": top_functions[:50]  # 상한
+        "top_functions": top_functions[:50],   # 상한
+        "module_counts": module_counts,        # [ADD]
+        "sample_paths": sample_paths           # [ADD]
     }
 
 # [ADD] 예상 테스트케이스 개수 추정(간단 휴리스틱)
 def estimate_tc_count(stats: dict) -> int:
-    # 기준: 파일 수·언어 수·탐지된 함수 수를 가중합 (최소 3건 보장)
     files = max(0, stats.get("total_files", 0))
     langs = sum(stats.get("lang_counts", Counter()).values())
     funcs = len(stats.get("top_functions", []))
-    # 가중치: 파일 0.3, 언어 0.7, 함수 0.9 -> 대략적인 볼륨 추정
     estimate = int(files * 0.3 + langs * 0.7 + funcs * 0.9)
-    return max(3, min(estimate, 300))  # 과도한 값 상한
+    return max(3, min(estimate, 300))  # 최소 3건, 최대 300건 제한
 
-def build_preview_testcases(stats: dict) -> pd.DataFrame:
-    # 휴리스틱 기반 결과 미리보기(3건)
+# [ADD] NEW: 함수명 → TC ID 생성 유틸 (실제와 유사한 도메인형 ID)
+def _split_words(name: str) -> list[str]:
+    """[ADD] 카멜/스네이크/기타 구분자 → 토큰 리스트"""
+    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", name)  # camelCase 분리
+    s = s.replace("_", " ")
+    return [w for w in re.findall(r"[A-Za-z]+", s) if w]
+
+def _abbr(word: str) -> str:
+    """[ADD] 도메인 용어 약어화"""
+    m = {
+        "manager": "Mgr", "management": "Mgmt",
+        "controller": "Ctrl", "service": "Svc",
+        "repository": "Repo", "configuration": "Config",
+        "request": "Req", "response": "Resp",
+        "application": "App", "message": "Msg",
+        "database": "DB", "client": "Clnt", "server": "Srv"
+    }
+    return m.get(word.lower(), word.capitalize())
+
+# [FIX] 넘버링 부여: TC-<Base>-### 형식으로 생성되도록 수정
+def make_tc_id_from_fn(fn: str, used_ids: set, seq: int | None = None) -> str:
+    """
+    [FIX] 함수명에서 불용어 제거 → 핵심 키워드 2~3개 → PascalCase/약어화 → 'TC-<Base>-###' 형식
+         - seq가 주어지면 해당 넘버를 3자리로 부여
+         - seq가 없으면 1부터 증가시키며 중복 없는 번호를 자동 할당
+    """
+    stop = {
+        "get","set","is","has","have","do","make","build","create","update","insert","delete","remove","fetch","load","read","write",
+        "put","post","patch","calc","compute","process","handle","run","exec","call","check","validate","convert","parse","format",
+        "test","temp","main","init","start","stop","open","close","send","receive","retry","download","upload","save","add","sum","plus","div","divide"
+    }
+    words = _split_words(fn)
+    core = [w for w in words if w.lower() not in stop]
+    if not core:
+        core = words[:2]  # 불용어만 있는 경우 앞 2개 사용
+    core = core[:3]      # 최대 3개 결합
+    base = "".join(_abbr(w) for w in core)
+    base = re.sub(r"[^A-Za-z0-9]", "", base)[:24] or re.sub(r"[^A-Za-z0-9]", "", fn.title())[:16] or "Auto"
+
+    # 넘버링 로직
+    if seq is not None:
+        n = seq
+    else:
+        n = 1
+        # 사용중인 같은 base의 최대 번호보다 큰 수 찾기
+        pattern = re.compile(rf"^TC-{re.escape(base)}-(\d{{3}})$")
+        for uid in used_ids:
+            m = pattern.match(uid)
+            if m:
+                n = max(n, int(m.group(1)) + 1)
+
+    tcid = f"TC-{base}-{n:03d}"
+    while tcid in used_ids:
+        n += 1
+        tcid = f"TC-{base}-{n:03d}"
+    used_ids.add(tcid)
+    return tcid
+
+# [FIX] NEW: "함수명 분석 기반" 샘플 TC 생성기 (중복 방지 + 2~3건 가변 + 디테일 강화 + 도메인형 TC ID 넘버링)
+def build_function_based_sample_tc(top_functions: list[str]) -> pd.DataFrame:
+    """
+    [FIX] 요구사항 반영:
+      - 1) distinct kind 기반 2~3건
+      - 2) 입력/예상결과 디테일 템플릿
+      - 3) TC ID: TC-<키워드>-### 형식으로 넘버링 부여
+      - ※ LLM 생성 TC ID에는 영향 없음 (본 함수는 Auto-Preview 전용)
+    """
     rows = []
-    if stats["lang_counts"]:
-        lang_str = ", ".join([f"{k} {v}개" for k, v in stats["lang_counts"].most_common()])
+    used_kinds = set()
+    used_ids = set()  # TC ID 중복 방지
+
+    def priority(kind: str) -> str:
+        high = {"div", "auth", "write", "delete", "io", "validate"}
+        return "High" if kind in high else "Medium"
+
+    def templates_for_kind(kind: str, fn: str):
+        fn_disp = fn
+        if kind == "add":
+            return [
+                (f"{fn_disp} 정상 합산", "a=10, b=20 (정상값)", "30 반환"),
+                (f"{fn_disp} 합산 경계값", "a=-1, b=1 (음수+양수)", "오버플로우/언더플로우 없이 0 반환")
+            ]
+        if kind == "div":
+            return [
+                (f"{fn_disp} 정상 나눗셈", "a=6, b=3 (정상값)", "2 반환(정수/실수 처리 일관)"),
+                (f"{fn_disp} 0 나눗셈 예외", "a=1, b=0 (비정상)", "ZeroDivisionError 또는 400/예외 코드")
+            ]
+        if kind == "read":
+            return [
+                (f"{fn_disp} 유효 조회", "id=1 (존재)", "정상 데이터 반환(HTTP 200/OK)"),
+                (f"{fn_disp} 미존재 조회", "id=999999 (미존재)", "404/빈 결과 반환")
+            ]
+        if kind == "write":
+            return [
+                (f"{fn_disp} 유효 쓰기", "payload={'name':'A','value':1}", "201/성공 및 영속 반영"),
+                (f"{fn_disp} 필수값 누락", "payload={'value':1} (name 누락)", "400/검증 오류 메시지")
+            ]
+        if kind == "delete":
+            return [
+                (f"{fn_disp} 유효 삭제", "id=1 (존재)", "삭제 성공 및 재조회 시 미존재"),
+                (f"{fn_disp} 중복/미존재 삭제", "id=999999 (미존재)", "404 또는 멱등 처리")
+            ]
+        if kind == "auth":
+            return [
+                (f"{fn_disp} 유효 토큰 접근", "Bearer 유효토큰", "200/권한 허용"),
+                (f"{fn_disp} 만료/위조 토큰", "Bearer 만료/위조 토큰", "401/403 접근 거부")
+            ]
+        if kind == "validate":
+            return [
+                (f"{fn_disp} 이메일 유효성(정상)", "s='user@example.com'", "True/허용"),
+                (f"{fn_disp} 이메일 유효성(이상)", "s='invalid@domain'", "False/422 또는 검증 실패")
+            ]
+        if kind == "io":
+            return [
+                (f"{fn_disp} 업로드/다운로드 성공", "파일=1MB, timeout=5s", "성공/정상 응답, 무결성 유지"),
+                (f"{fn_disp} 네트워크 타임아웃", "timeout=1s (지연 환경)", "재시도 or 타임아웃 오류 처리")
+            ]
+        return [
+            (f"{fn_disp} 기본 정상 동작", "표준 입력 1세트(정상)", "성공 코드/정상 반환"),
+            (f"{fn_disp} 비정상 입력 처리", "필수값 누락 또는 타입 불일치", "명확한 오류 메시지/코드 반환")
+        ]
+
+    def classify(fn: str) -> str:
+        s = fn.lower()
+        if any(k in s for k in ["add", "sum", "plus"]): return "add"
+        if any(k in s for k in ["div", "divide"]): return "div"
+        if any(k in s for k in ["get", "fetch", "load", "read"]): return "read"
+        if any(k in s for k in ["save", "create", "update", "insert", "post", "put"]): return "write"
+        if any(k in s for k in ["delete", "remove"]): return "delete"
+        if any(k in s for k in ["auth", "login", "signin", "verify", "token"]): return "auth"
+        if any(k in s for k in ["email", "validate", "regex", "check"]): return "validate"
+        if any(k in s for k in ["upload", "download", "request", "client", "socket"]): return "io"
+        return "default"
+
+    # ➊ distinct kind 기준으로 최대 3건 수집 (TC ID에 넘버링 부여)
+    candidates = []
+    seq_counter = 1  # [FIX] TC ID 넘버링 시작
+    for fn in top_functions:
+        kind = classify(fn)
+        if kind in used_kinds:
+            continue
+        used_kinds.add(kind)
+        title, inp, exp = templates_for_kind(kind, fn)[0]
+        tcid = make_tc_id_from_fn(fn, used_ids, seq=seq_counter)  # [FIX] TC-<Base>-### 부여
+        seq_counter += 1
+        candidates.append([kind, fn, tcid, title, inp, exp, priority(kind)])
+        if len(candidates) >= 3:
+            break
+
+    # ➋ 결과 구성 (2~3건 보장, 서로 다른 케이스, 넘버링 지속)
+    result = []
+    if len(candidates) >= 3:
+        for c in candidates[:3]:
+            kind, fn, tcid, title, inp, exp, pr = c
+            result.append([tcid, title, inp, exp, pr])
+    elif len(candidates) == 2:
+        for c in candidates:
+            kind, fn, tcid, title, inp, exp, pr = c
+            result.append([tcid, title, inp, exp, pr])
+    elif len(candidates) == 1:
+        kind, fn, _, _, _, _, pr = candidates[0]
+        t_list = templates_for_kind(kind, fn)
+        # 두 개 템플릿을 서로 다른 ID로 (넘버링 이어서)
+        for (title, inp, exp) in t_list[:2]:
+            tcid = make_tc_id_from_fn(fn, used_ids, seq=seq_counter)  # [FIX] 같은 base에 다른 ### 부여
+            seq_counter += 1
+            result.append([tcid, title, inp, exp, pr])
     else:
-        lang_str = "감지된 언어 없음"
-    rows.append(["TC-PV-001", "언어 혼합 프로젝트 로딩", f"언어분포: {lang_str}", "모든 파일 파싱 성공", "High"])
-    if stats["top_functions"]:
-        fn = stats["top_functions"][0]
-        rows.append(["TC-PV-002", f"핵심 함수/엔드포인트 동작 검증({fn})", "유효/무효 입력 2세트", "정상/에러 응답 구분", "High"])
-    else:
-        rows.append(["TC-PV-002", "엔드포인트/함수 미검출 시 기본 동작", "기본 실행", "에러 없이 앱 부팅", "Medium"])
-    rows.append(["TC-PV-003", "대상 코드 범위 커버리지 초기 점검", f"파일 수={stats['total_files']}", "주요 모듈별 1개 이상 케이스 존재", "Medium"])
+        # 함수가 전혀 없는 경우: 기본 2건 (서로 다른 ID, 넘버링 부여)
+        tcid1 = make_tc_id_from_fn("Bootstrap_Init", used_ids, seq=1)
+        tcid2 = make_tc_id_from_fn("CorePath_Error", used_ids, seq=2)
+        result = [
+            [tcid1, "엔트리포인트 기본 부팅 검증", "기본 실행 플로우", "에러 없이 초기 화면/상태 도달", "Medium"],
+            [tcid2, "핵심 경로 예외 처리 검증", "유효하지 않은 입력(타입 불일치/누락)", "명확한 오류 메시지/코드 반환", "High"],
+        ]
+
+    return pd.DataFrame(result, columns=["TC ID", "기능 설명", "입력값", "예상 결과", "우선순위"])
+
+# [ADD] (기존 함수: 언어/모듈까지 반영하던 휴리스틱) — 유지하되, 현재는 사용하지 않음
+def build_preview_testcases(stats: dict) -> pd.DataFrame:
+    rows = []
+    total_files = stats.get("total_files", 0)
+    lang_counts: Counter = stats.get("lang_counts", Counter())
+    top_functions = stats.get("top_functions", [])
+    module_counts: Counter = stats.get("module_counts", Counter())
+    if lang_counts:
+        lang_str = ", ".join([f"{k} {v}개" for k, v in lang_counts.most_common()])
+        rows.append(["TC-PV-LANG", f"언어분포 기반 초기 로딩/파싱 검증 ({lang_str})", "초기 로딩", f"파일 파싱 성공({total_files}개)", "Medium"])
+    if top_functions:
+        fn = top_functions[0]
+        rows.append(["TC-PV-FUNC", f"핵심 함수/엔드포인트 동작 검증({fn})", "경계·무효 포함 2세트", "정상/에러 구분", "High"])
+    rows.append(["TC-PV-COV", "모듈 커버리지 초기 점검", f"파일 수={total_files}", f"모듈 수={len(module_counts)}", "Medium"])
     return pd.DataFrame(rows, columns=["TC ID", "기능 설명", "입력값", "예상 결과", "우선순위"])
 
-# [ADD] 결과 미리보기(휴리스틱) - Tab2: TC → 명세서 요약 프리뷰
+# [ADD] 결과 미리보기(휴리스틱) - Tab2/Tab3용 보조 함수(요구상 미사용)
 def build_preview_spec(df: pd.DataFrame, summary_type: str) -> str:
-    # 간단 규칙: 기능/요구사항 제목 후보 2~3개 생성
     titles = []
     if "기능 설명" in df.columns:
         titles = list(pd.Series(df["기능 설명"]).dropna().astype(str).head(3).unique())
     elif "TC ID" in df.columns:
         titles = [f"{summary_type} 기반: {str(df['TC ID'].iloc[i])}" for i in range(min(3, len(df)))]
-
     if not titles:
         titles = [f"{summary_type} 초안 항목"]
-
     lines = []
     for t in titles:
         lines.append(f"- **{t}**\n  - 설명: 입력/예상결과를 기준으로 동작 목적과 예외처리를 요약합니다.\n  - 기대 효과: 기능 명확화, 경계값 확인, 회귀 테스트 기반 확보.")
     return "\n".join(lines)
 
-# [ADD] 결과 미리보기(휴리스틱) - Tab3: 로그 → 시나리오 초안 프리뷰
 def build_preview_scenario(raw_log: str) -> str:
     sev_hits = re.findall(r"(ERROR|Exception|WARN|FATAL)", raw_log, flags=re.IGNORECASE)
     sev_stat = Counter([s.upper() for s in sev_hits])
@@ -261,22 +445,19 @@ with code_tab:
 
     qa_role = st.session_state.get("qa_role", "기능 QA")
 
-    # [ADD] 강화된 결과 미리보기(휴리스틱): 업로드 즉시 "요약 + 3건 프리뷰"
+    # (유지) 요약 블록
     code_bytes = None
     if uploaded_file:
         code_bytes = uploaded_file.getvalue()
         stats = analyze_code_zip(code_bytes)
 
-        # ── 요약 정보 블록: 파일 수 / 언어 / 함수·엔드포인트 / 예상 TC 개수
-        with st.expander("📊 결과 요약(휴리스틱)", expanded=True):
-            # 언어 분포 문자열
+        with st.expander("📊 Auto-Preview(요약)", expanded=True):
             if stats["lang_counts"]:
                 lang_str = ", ".join([f"{k} {v}개" for k, v in stats["lang_counts"].most_common()])
             else:
                 lang_str = "감지된 언어 없음"
             funcs_cnt = len(stats["top_functions"])
             expected_tc = estimate_tc_count(stats)
-
             st.markdown(
                 f"- **파일 수**: {stats['total_files']}\n"
                 f"- **언어 분포**: {lang_str}\n"
@@ -284,10 +465,10 @@ with code_tab:
                 f"- **예상 테스트케이스 개수(추정)**: {expected_tc}"
             )
 
-        # ── 휴리스틱 미리보기 3건 표
-        with st.expander("🔮 결과 미리보기(휴리스틱: 테스트케이스 3건)", expanded=True):
-            pv_df = build_preview_testcases(stats)
-            st.dataframe(pv_df, use_container_width=True)
+        # (유지) 라벨: Auto-Preview(Sample TC) / 생성 로직: 함수명 분석 기반
+        with st.expander("🔮 Auto-Preview(Sample TC)", expanded=True):
+            sample_df = build_function_based_sample_tc(stats.get("top_functions", []))
+            st.dataframe(sample_df, use_container_width=True)
 
     if uploaded_file and need_llm_call(uploaded_file, model, qa_role):
         st.session_state["is_loading"] = True
@@ -313,15 +494,22 @@ with code_tab:
                                     full_code += f"\n\n# FILE: {file}\n{code}"
                             except:
                                 continue
+            # ⚠️ [중요] LLM 프롬프트/출력 파싱은 변경하지 않음 → LLM 생성 TC ID는 기존과 동일 동작
             prompt = f"""
 너는 시니어 QA 엔지니어이며, 현재 '{qa_role}' 역할을 맡고 있다.
 아래에 제공된 소스코드를 분석하여 기능 단위의 테스트 시나리오 기반 테스트케이스를 생성하라.
 
-📌 출력 형식은 아래 마크다운 테이블 형태로 작성하되,
-우선순위는 반드시 High / Medium / Low 중 하나로 작성할 것:
+반드시 아래 형식을 지켜라:
+- 각 기능은 "## 기능명" 헤딩으로 시작한다. (예: `## AlarmManager`)
+- 각 기능 섹션마다 **하나의 마크다운 테이블**만 포함한다.
+- 테이블 컬럼: | TC ID | 기능 설명 | 입력값 | 예상 결과 | 우선순위 |
+- **TC ID는 반드시 `tc-<feature-key>-NNN` 형식**을 사용하라. (예: `tc-alarm-001`)
+  - `<feature-key>`는 아래 힌트 목록의 key 중 가장 적합한 값을 사용한다.
+  - 각 기능 섹션마다 NNN은 001부터 다시 시작한다.
+- 기능 섹션 외 불필요한 텍스트/설명은 넣지 말라.
 
-| TC ID | 기능 설명 | 입력값 | 예상 결과 | 우선순위 |
-|-------|-----------|--------|------------|---------|
+[기능 힌트 목록]
+{hints_md}
 
 소스코드:
 {full_code}
@@ -374,7 +562,7 @@ with code_tab:
 with tc_tab:
     st.subheader("📑 테스트케이스 기반 기능/요구사항 명세서 추출기")
 
-    # (요구사항) Tab2에 샘플 테스트케이스 엑셀 다운로드 제공
+    # (요구사항 유지) Tab2에 샘플 테스트케이스 엑셀 다운로드 제공
     st.download_button(
         "⬇️ 샘플 테스트케이스 엑셀 다운로드",
         data=build_sample_tc_excel(),
@@ -391,7 +579,7 @@ with tc_tab:
     if st.button("🚀 명세서 생성하기", disabled=st.session_state["is_loading"]) and tc_file:
         st.session_state["is_loading"] = True
 
-        # (유지) 원래 로직 + (유지) 결과 미리보기(휴리스틱)
+        # (요구사항) Tab2는 휴리스틱 미리보기 제외 — 기존 로직 유지
         try:
             if tc_file.name.endswith("csv"):
                 df = pd.read_csv(tc_file)
@@ -401,10 +589,6 @@ with tc_tab:
             st.session_state["is_loading"] = False
             st.error(f"❌ 파일 읽기 실패: {e}")
             st.stop()
-
-        with st.expander("🔮 결과 미리보기(휴리스틱: 요약 초안)", expanded=True):
-            pv_text = build_preview_spec(df, summary_type)
-            st.markdown(pv_text)
 
         with st.spinner("🔍 LLM 호출 중입니다. 잠시만 기다려 주세요..."):
             required_cols = ["TC ID", "기능 설명", "입력값", "예상 결과"]
@@ -485,12 +669,10 @@ with log_tab:
     if not API_KEY:
         st.warning("🔐 OpenRouter API Key가 설정되지 않았습니다.")
 
+    # (요구사항) Tab3는 휴리스틱 미리보기 제외 — 기존 로직 유지
     raw_log_cache = None
     if log_file:
         raw_log_cache = log_file.read().decode("utf-8", errors="ignore")
-        # (유지) 결과 미리보기(휴리스틱): 재현 시나리오 골격
-        with st.expander("🔮 결과 미리보기(휴리스틱: 시나리오 골격)", expanded=True):
-            st.markdown(build_preview_scenario(raw_log_cache))
 
     if st.button("🚀 시나리오 생성하기", disabled=st.session_state["is_loading"]) and raw_log_cache:
         st.session_state["is_loading"] = True
