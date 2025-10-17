@@ -506,7 +506,6 @@ with code_tab:
 - **TC ID는 반드시 `tc-<feature-key>-NNN` 형식**을 사용하라. (예: `tc-alarm-001`)
   - `<feature-key>`는 아래 힌트 목록의 key 중 가장 적합한 값을 사용한다.
   - 각 기능 섹션마다 NNN은 001부터 다시 시작한다.
-- 기능 섹션 외 불필요한 텍스트/설명은 넣지 말라.
 
 [기능 힌트 목록]
 {hints_md}
@@ -737,3 +736,4 @@ with log_tab:
         st.download_button("⬇️ 시나리오 텍스트 다운로드",
                            data=st.session_state.scenario_result,
                            file_name="재현_시나리오.txt")
+
